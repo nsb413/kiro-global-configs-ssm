@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'global-demo/settings/**'
-      - 'global-demo/steering/**'
+      - 'settings/**'
+      - 'steering/**'
   workflow_dispatch:
 
 permissions:
@@ -29,15 +29,14 @@ jobs:
 
       - name: Sync settings to S3
         run: |
-          aws s3 sync global-demo/settings/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/settings/ \
+          aws s3 sync settings/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/settings/ \
             --delete \
             --exclude "*" \
             --include "*.json"
 
       - name: Sync steering to S3
         run: |
-          aws s3 sync global-demo/steering/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/steering/ \
+          aws s3 sync steering/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/steering/ \
             --delete \
             --exclude "*" \
             --include "*.md"
-

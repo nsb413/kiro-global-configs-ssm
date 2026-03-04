@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'SSM Document for syncing Kiro configurations from S3 to Windows instances'
+
+Resources:
+  SyncKiroConfigsWindows:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: SyncKiroConfigsFromS3-Windows
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: 'Download Kiro global configurations from S3 to all user profiles on Windows'
+        parameters:
+          S3BucketName:
+            type: String
+            description: 'S3 bucket containing Kiro configurations'
+            default: 'kiro-global-configs'
+          UsersDrive:
+            type: String
+            description: 'Drive letter where user profiles are located'
+            default: 'D:'
+          SyncSettings:
+            type: String
+            description: 'Sync settings files (true/false)'
+            default: 'true'
+            allowedValues:
+              - 'true'
+              - 'false'
+          SyncSteering:
+            type: String
+            description: 'Sync steering files (true/false)'
+            default: 'true'
+            allowedValues:
+              - 'true'
+              - 'false'
+        mainSteps:
+          - action: aws:runPowerShellScript
+            name: syncKiroConfigsAllUsers
+            inputs:
+              runCommand:
+                - |
+                  $ErrorActionPreference = "Stop"
+                  
+                  $S3Bucket = "{{ S3BucketName }}"
+                  $UsersDrive = "{{ UsersDrive }}"
+                  $SyncSettings = "{{ SyncSettings }}"
+                  $SyncSteering = "{{ SyncSteering }}"
+                  
+                  Write-Host "=== Kiro Configuration Sync from S3 ==="
+                  Write-Host "S3 Bucket: s3://$S3Bucket"
+                  Write-Host "Users Drive: $UsersDrive"
+                  Write-Host ""
+                  
+                  # Get all user directories
+                  $UsersPath = Join-Path $UsersDrive "Users"
+                  
+                  if (-not (Test-Path $UsersPath)) {
+                    Write-Host "ERROR: Users directory not found at $UsersPath"
+                    exit 1
+                  }
+                  
+                  # Get all user folders, excluding system folders
+                  $ExcludedFolders = @('Public', 'Default', 'Default User', 'All Users')
+                  $UserFolders = Get-ChildItem -Path $UsersPath -Directory | 
+                    Where-Object { $_.Name -notin $ExcludedFolders }
+                  
+                  if ($UserFolders.Count -eq 0) {
+                    Write-Host "WARNING: No user folders found in $UsersPath"
+                    exit 0
+                  }
+                  
+                  Write-Host "Found $($UserFolders.Count) user profile(s) to sync"
+                  Write-Host ""
+                  
+                  $SuccessCount = 0
+                  $FailCount = 0
+                  
+                  foreach ($UserFolder in $UserFolders) {
+                    $Username = $UserFolder.Name
+                    $KiroDir = Join-Path $UserFolder.FullName ".kiro"
+                    
+                    Write-Host "--- Syncing for user: $Username ---"
+                    
+                    try {
+                      # Create .kiro directory
+                      New-Item -ItemType Directory -Force -Path $KiroDir | Out-Null
+                      
+                      # Sync settings files
+                      if ($SyncSettings -eq "true") {
+                        $SettingsDir = Join-Path $KiroDir "settings"
+                        New-Item -ItemType Directory -Force -Path $SettingsDir | Out-Null
+                        
+                        Write-Host "  Syncing settings..."
+                        aws s3 sync "s3://$S3Bucket/kiro/settings/" $SettingsDir `
+                          --delete --quiet
+                        
+                        $SettingsCount = (Get-ChildItem -Path $SettingsDir -File -ErrorAction SilentlyContinue).Count
+                        Write-Host "  ✓ Settings synced ($SettingsCount files)"
+                      }
+                      
+                      # Sync steering files
+                      if ($SyncSteering -eq "true") {
+                        $SteeringDir = Join-Path $KiroDir "steering"
+                        New-Item -ItemType Directory -Force -Path $SteeringDir | Out-Null
+                        
+                        Write-Host "  Syncing steering..."
+                        aws s3 sync "s3://$S3Bucket/kiro/steering/" $SteeringDir `
+                          --delete --quiet
+                        
+                        $SteeringCount = (Get-ChildItem -Path $SteeringDir -File -ErrorAction SilentlyContinue).Count
+                        Write-Host "  ✓ Steering synced ($SteeringCount files)"
+                      }
+                      
+                      Write-Host "  ✓ Completed: $KiroDir"
+                      $SuccessCount++
+                      
+                    } catch {
+                      Write-Host "  ✗ Failed: $($_.Exception.Message)" -ForegroundColor Red
+                      $FailCount++
+                    }
+                    
+                    Write-Host ""
+                  }
+                  
+                  Write-Host "=== Sync Summary ==="
+                  Write-Host "Total users: $($UserFolders.Count)"
+                  Write-Host "Successful: $SuccessCount"
+                  Write-Host "Failed: $FailCount"
+                  
+                  if ($FailCount -gt 0) {
+                    Write-Host ""
+                    Write-Host "WARNING: Some users failed to sync" -ForegroundColor Yellow
+                  }
+      Tags:
+        - Key: Purpose
+          Value: KiroConfigSync
+
+Outputs:
+  WindowsDocumentName:
+    Description: Name of the Windows SSM document
+    Value: !Ref SyncKiroConfigsWindows
+    Export:
+      Name: KiroSyncDocumentWindows

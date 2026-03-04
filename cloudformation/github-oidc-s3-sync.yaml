@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'GitHub OIDC provider and IAM role for syncing Kiro configs to S3'
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization or username
+    Default: your-org
+  
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name
+    Default: your-repo
+  
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for storing Kiro configurations
+    Default: kiro-global-configs
+  
+  CreateBucket:
+    Type: String
+    Description: Create the S3 bucket (set to 'false' if bucket already exists)
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  ShouldCreateBucket: !Equals [!Ref CreateBucket, 'true']
+
+Resources:
+  # S3 Bucket for Kiro configurations
+  KiroConfigBucket:
+    Type: AWS::S3::Bucket
+    Condition: ShouldCreateBucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Purpose
+          Value: KiroGlobalConfigs
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # GitHub OIDC Provider
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+      Tags:
+        - Key: Name
+          Value: GitHubActionsOIDC
+        - Key: Purpose
+          Value: GitHubActions
+
+  # IAM Role for GitHub Actions
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GitHubActionsKiroSync
+      Description: Role for GitHub Actions to sync Kiro configs to S3
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt GitHubOIDCProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*'
+      ManagedPolicyArns: []
+      Tags:
+        - Key: Name
+          Value: GitHubActionsKiroSync
+        - Key: Purpose
+          Value: S3Sync
+
+  # IAM Policy for S3 access
+  S3SyncPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: KiroConfigS3SyncPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListBucket
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub 
+              - 'arn:aws:s3:::${BucketName}'
+              - BucketName: !If [ShouldCreateBucket, !Ref KiroConfigBucket, !Ref S3BucketName]
+          - Sid: ReadWriteObjects
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub 
+              - 'arn:aws:s3:::${BucketName}/*'
+              - BucketName: !If [ShouldCreateBucket, !Ref KiroConfigBucket, !Ref S3BucketName]
+      Roles:
+        - !Ref GitHubActionsRole
+
+Outputs:
+  RoleArn:
+    Description: ARN of the IAM role for GitHub Actions
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: GitHubActionsKiroSyncRoleArn
+  
+  BucketName:
+    Description: S3 bucket name for Kiro configurations
+    Value: !If [ShouldCreateBucket, !Ref KiroConfigBucket, !Ref S3BucketName]
+    Export:
+      Name: KiroConfigBucketName
+  
+  BucketArn:
+    Description: ARN of the S3 bucket
+    Value: !Sub 
+      - 'arn:aws:s3:::${BucketName}'
+      - BucketName: !If [ShouldCreateBucket, !Ref KiroConfigBucket, !Ref S3BucketName]
+  
+  OIDCProviderArn:
+    Description: ARN of the GitHub OIDC provider

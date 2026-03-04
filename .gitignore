@@ -1,0 +1,9 @@
+blog-post.md
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Diagram generation
+create_diagram.py

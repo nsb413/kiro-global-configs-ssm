@@ -1,0 +1,43 @@
+name: Sync Kiro Configs to S3
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'global-demo/settings/**'
+      - 'global-demo/steering/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sync-to-s3:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Sync settings to S3
+        run: |
+          aws s3 sync global-demo/settings/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/settings/ \
+            --delete \
+            --exclude "*" \
+            --include "*.json"
+
+      - name: Sync steering to S3
+        run: |
+          aws s3 sync global-demo/steering/ s3://${{ secrets.S3_BUCKET_NAME }}/kiro/steering/ \
+            --delete \
+            --exclude "*" \
+            --include "*.md"
+
